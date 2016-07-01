@@ -21,6 +21,8 @@
 #include <linux/leds.h>
 #include <linux/qpnp/pwm.h>
 #include <linux/err.h>
+#include <linux/backlight.h>
+#include <linux/mfd/lm3533.h>
 
 #include "mdss_dsi.h"
 #include "mdss_livedisplay.h"
@@ -642,6 +644,12 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 			mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
 			if (sctrl)
 				mdss_dsi_panel_bklt_dcs(sctrl, bl_level);
+		}
+		break;
+	case BL_SIC:
+		if (lm3533_bl_bd != NULL) {
+			lm3533_bl_bd->props.brightness = bl_level;
+			backlight_update_status(lm3533_bl_bd);
 		}
 		break;
 	default:
@@ -1844,6 +1852,8 @@ static int mdss_panel_parse_dt(struct device_node *np,
 			ctrl_pdata->bklt_ctrl = BL_DCS_CMD;
 			pr_debug("%s: Configured DCS_CMD bklt ctrl\n",
 								__func__);
+		} else if (!strncmp(data, "bl_ctrl_sic", 11)) {
+			ctrl_pdata->bklt_ctrl = BL_SIC;
 		}
 	}
 	rc = of_property_read_u32(np, "qcom,mdss-brightness-max-level", &tmp);

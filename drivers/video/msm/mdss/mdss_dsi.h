@@ -90,6 +90,7 @@ enum dsi_panel_bl_ctrl {
 	BL_PWM,
 	BL_WLED,
 	BL_DCS_CMD,
+	BL_SIC,
 	UNKNOWN_CTRL,
 };
 
@@ -390,6 +391,15 @@ struct mdss_dsi_ctrl_pdata {
 	struct dsi_panel_cmds post_dms_on_cmds;
 	struct dsi_panel_cmds post_panel_on_cmds;
 	struct dsi_panel_cmds off_cmds;
+
+	struct dsi_panel_cmds dispparam_cmds;
+	struct dsi_panel_cmds dispparam_cabcon_gui_cmds;
+	struct dsi_panel_cmds dispparam_cabcon_still_cmds;
+	struct dsi_panel_cmds dispparam_cabcon_movie_cmds;
+	struct dsi_panel_cmds dispparam_cabcoff_cmds;
+	struct dsi_panel_cmds dispparam_ceon_cmds;
+	struct dsi_panel_cmds dispparam_ceoff_cmds;
+
 	struct dsi_panel_cmds status_cmds;
 #ifdef CONFIG_MACH_CP8675
 	struct dsi_panel_status_regs status_regs;
