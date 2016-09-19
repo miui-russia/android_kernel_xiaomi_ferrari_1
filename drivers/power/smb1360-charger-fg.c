@@ -241,6 +241,24 @@
 #define FG_PROFILE_A_ADDR		0x4
 #define FG_PROFILE_B_ADDR		0x6
 
+#ifdef CONFIG_MACH_SPIRIT
+#define CFG_BATT_CHG_FREQ_REG		0x03
+#define SWITCH_FREQ_BIT			BIT(7)
+
+#define OTG_UVLO_REG			0x12
+#define OTG_UVLO_MASK			SMB1360_MASK(4, 2)
+#define OTG_UVLO_DATA			2
+#define OTG_UVLO_SHIFT			2
+
+#define PRE_TO_FAST_MASK		SMB1360_MASK(7, 5)
+#define PRE_TO_FAST_DATA		7
+#define PRE_TO_FAST_SHIFT		5
+
+#define PRE_CHARGE_CURRENT_MASK		SMB1360_MASK(1, 0)
+#define PRE_CHARGE_CURRENT_SHIFT	0
+#define PRE_CHARGE_CURRENT_DATA		1
+#endif
+
 /* Constants */
 #define CURRENT_100_MA			100
 #define CURRENT_500_MA			500
@@ -248,7 +266,11 @@
 #define JEITA_WORK_MS			3000
 #define SOC_WORK_MS			20000
 
+#ifdef CONFIG_MACH_SPIRIT
+#define FG_RESET_THRESHOLD_MV		50
+#else
 #define FG_RESET_THRESHOLD_MV		15
+#endif
 #define SMB1360_REV_1			0x01
 
 enum {
@@ -333,6 +355,9 @@ struct smb1360_chip {
 	int				delta_soc;
 	int				voltage_min_mv;
 	int				voltage_empty_mv;
+#ifdef CONFIG_MACH_SPIRIT
+	int				suspend_voltage_empty_mv;
+#endif
 	int				batt_capacity_mah;
 	int				cc_soc_coeff;
 	int				v_cutoff_mv;
@@ -360,6 +385,9 @@ struct smb1360_chip {
 	bool				batt_warm;
 	bool				batt_cool;
 	bool				batt_full;
+#ifdef CONFIG_MACH_T86519A1
+	bool				power_ok;
+#endif
 	bool				resume_completed;
 	bool				irq_waiting;
 	bool				empty_soc;
@@ -387,6 +415,10 @@ struct smb1360_chip {
 	struct mutex			current_change_lock;
 	struct mutex			read_write_lock;
 };
+
+#ifdef CONFIG_MACH_SPIRIT
+static struct smb1360_chip *g_chip = NULL;
+#endif
 
 static int chg_time[] = {
 	192,
@@ -906,6 +938,11 @@ static int smb1360_get_prop_batt_status(struct smb1360_chip *chip)
 
 	pr_info_ratelimited("STATUS_3_REG = %x\n", reg);
 
+#ifdef CONFIG_MACH_T86519A1
+	if (!chip->power_ok)
+		return POWER_SUPPLY_STATUS_DISCHARGING;
+#endif
+
 	if (reg & CHG_HOLD_OFF_BIT)
 		return POWER_SUPPLY_STATUS_NOT_CHARGING;
 
@@ -1140,6 +1177,9 @@ static int smb1360_set_appropriate_usb_current(struct smb1360_chip *chip)
 {
 	int rc = 0, i, therm_ma, current_ma;
 	int path_current = chip->usb_psy_ma;
+#ifdef CONFIG_MACH_SPIRIT
+	u8 icl_reg = 0;
+#endif
 
 	/*
 	 * If battery is absent do not modify the current at all, these
@@ -1194,11 +1234,40 @@ static int smb1360_set_appropriate_usb_current(struct smb1360_chip *chip)
 		pr_info("Couldn't find ICL mA rc=%d\n", rc);
 		i = 0;
 	}
+#ifdef CONFIG_MACH_SPIRIT
+	rc = smb1360_read(chip, CFG_BATT_CHG_ICL_REG, &icl_reg);
+	if (rc) {
+		pr_err("%s:%d: Failed to read CFG_BATT_CHG_ICL_REG\n",
+				__func__, __LINE__);
+	}
+	if (get_usb_charger_type() == POWER_SUPPLY_TYPE_USB) {
+		icl_reg = (icl_reg & 0xf) - 2;
+		if (icl_reg != i) {
+			rc = smb1360_masked_write(chip, CFG_BATT_CHG_ICL_REG,
+					INPUT_CURR_LIM_MASK, i + 2);
+			if (rc) {
+				pr_err("%s:%d: Failed to set USB ICL mA: %d\n",
+						__func__, __LINE__, rc);
+			}
+		}
+	} else if (get_usb_charger_type() == POWER_SUPPLY_TYPE_USB_DCP) {
+		icl_reg = icl_reg & 0xf;
+		if (icl_reg != i) {
+			rc = smb1360_masked_write(chip, CFG_BATT_CHG_ICL_REG,
+					INPUT_CURR_LIM_MASK, i);
+			if (rc) {
+				pr_err("%s:%d: Failed to set AC ICL mA: %d\n",
+						__func__, __LINE__, rc);
+			}
+		}
+	}
+#else
 	/* set input current limit */
 	rc = smb1360_masked_write(chip, CFG_BATT_CHG_ICL_REG,
 					INPUT_CURR_LIM_MASK, i);
 	if (rc)
 		pr_err("Couldn't set ICL mA rc=%d\n", rc);
+#endif
 
 	pr_info("ICL set to = %d\n", input_current_limit[i]);
 
@@ -1211,7 +1280,12 @@ static int smb1360_set_appropriate_usb_current(struct smb1360_chip *chip)
 		current_ma = CURRENT_500_MA;
 	}
 
+#ifdef CONFIG_MACH_SPIRIT
+	if ((current_ma <= CURRENT_100_MA) || (chip->limit_call_current &&
+				smb1360_get_prop_batt_capacity(chip) >= 99)) {
+#else
 	if (current_ma <= CURRENT_100_MA) {
+#endif
 		/* USB 100 */
 		rc = smb1360_masked_write(chip, CMD_IL_REG,
 				USB_CTRL_MASK, USB_100_BIT);
@@ -1219,6 +1293,7 @@ static int smb1360_set_appropriate_usb_current(struct smb1360_chip *chip)
 			pr_err("Couldn't configure for USB100 rc=%d\n", rc);
 		pr_info("Setting USB 100\n");
 	} else if (current_ma <= CURRENT_500_MA) {
+#endif
 		/* USB 500 */
 		rc = smb1360_masked_write(chip, CMD_IL_REG,
 				USB_CTRL_MASK, USB_500_BIT);
@@ -1528,13 +1603,25 @@ static void smb1360_jeita_work_fn(struct work_struct *work)
 {
 	int temp;
 	int rc = 0;
+	bool enable_charge = false;
 	struct delayed_work *dwork = to_delayed_work(work);
 	struct smb1360_chip *chip = container_of(dwork, struct smb1360_chip,
 							jeita_work);
 	temp = smb1360_get_prop_batt_temp(chip);
 
+#ifdef CONFIG_MACH_T86519A1
+	if(!high_temp_chg && temp < chip->warm_bat_decidegc) {
+		pr_info("low temp threshold, enable charging\n");
+		smb1360_charging_disable(chip, USER, 0);
+		power_supply_changed(&chip->batt_psy);
+		power_supply_changed(chip->usb_psy);
+		high_temp_chg = 1;
+	}
+#endif
+
 	if (temp > chip->hot_bat_decidegc) {
-		/* battery status is hot, only config thresholds */
+		/* battery status is hot, disable charge and config thresholds */
+		enable_charge = false;
 		rc = smb1360_set_soft_jeita_threshold(chip,
 			chip->warm_bat_decidegc, chip->hot_bat_decidegc);
 		if (rc) {
@@ -1546,6 +1633,21 @@ static void smb1360_jeita_work_fn(struct work_struct *work)
 		/* battery status is warm, do compensation manually */
 		chip->batt_warm = true;
 		chip->batt_cool = false;
+		/* Enable/disable charging based on requested current */
+		enable_charge = (chip->warm_bat_ma > 0) ? true : false;
+		if (!enable_charge) {
+			/* Skip setting voltage/current if charging disabled */
+			goto toggle_charging;
+		}
+#ifdef CONFIG_MACH_T86519A1
+		if(high_temp_chg && temp >= chip->hot_bat_decidegc) {
+			high_temp_chg = 0;
+			pr_info("high temp threshold, disable charging\n");
+			smb1360_charging_disable(chip, USER, 1);
+			power_supply_changed(&chip->batt_psy);
+			power_supply_changed(chip->usb_psy);
+		}
+#endif
 		rc = smb1360_float_voltage_set(chip, chip->warm_bat_mv);
 		if (rc) {
 			dev_err(chip->dev, "Couldn't set float voltage\n");
@@ -1565,6 +1667,8 @@ static void smb1360_jeita_work_fn(struct work_struct *work)
 		/* battery status is good, do the normal charging */
 		chip->batt_warm = false;
 		chip->batt_cool = false;
+		/* Always enable charging for the normal case */
+		enable_charge = true;
 		rc = smb1360_float_voltage_set(chip, chip->vfloat_mv);
 		if (rc) {
 			dev_err(chip->dev, "Couldn't set float voltage\n");
@@ -1583,11 +1687,20 @@ static void smb1360_jeita_work_fn(struct work_struct *work)
 		/* battery status is cool, do compensation manually */
 		chip->batt_cool = true;
 		chip->batt_warm = false;
+		/* Enable/disable charging based on requested current */
+		enable_charge = (chip->cool_bat_ma > 0) ? true : false;
+		if (!enable_charge) {
+			/* Skip setting voltage/current if charging disabled */
+			goto toggle_charging;
+		}
 		rc = smb1360_float_voltage_set(chip, chip->cool_bat_mv);
 		if (rc) {
 			dev_err(chip->dev, "Couldn't set float voltage\n");
 			goto end;
 		}
+		rc = smb1360_set_appropriate_usb_current(chip);
+		if (rc)
+			pr_err("Couldn't set USB current\n");
 		rc = smb1360_set_soft_jeita_threshold(chip,
 			chip->cold_bat_decidegc, chip->cool_bat_decidegc);
 		if (rc) {
@@ -1595,7 +1708,8 @@ static void smb1360_jeita_work_fn(struct work_struct *work)
 			goto end;
 		}
 	} else {
-		/* battery status is cold, only config thresholds */
+		/* battery status is cold, disable charge and config thresholds */
+		enable_charge = false;
 		rc = smb1360_set_soft_jeita_threshold(chip,
 			chip->cold_bat_decidegc, chip->cool_bat_decidegc);
 		if (rc) {
@@ -2115,6 +2229,15 @@ static int otg_oc_handler(struct smb1360_chip *chip, u8 rt_stat)
 	return 0;
 }
 
+#ifdef CONFIG_MACH_T86519A1
+static int power_ok_handler(struct smb1360_chip *chip, u8 rt_stat)
+{
+	pr_debug("xxx::usb in::rt_stat = 0x%02x\n", rt_stat);
+	chip->power_ok = rt_stat;
+	return 0;
+}
+#endif
+
 struct smb_irq_info {
 	const char		*name;
 	int			(*smb_irq)(struct smb1360_chip *chip,
@@ -2228,6 +2351,9 @@ static struct irq_handler_info handlers[] = {
 		{
 			{
 				.name		= "power_ok",
+#ifdef CONFIG_MACH_T86519A1
+				.smb_irq	= power_ok_handler,
+#endif
 			},
 			{
 				.name		= "unused",
@@ -3666,6 +3792,15 @@ static int smb1360_hw_init(struct smb1360_chip *chip)
 		return rc;
 	}
 
+#ifdef CONFIG_MACH_SPIRIT
+	/* Set the switching frequency to 3.2MHz */
+	rc = smb1360_masked_write(chip, CFG_BATT_CHG_FREQ_REG, SWITCH_FREQ_BIT, 0);
+	if (rc < 0) {
+		dev_err(chip->dev, "Couldn't set CFG_BATT_CHG_FREQ_REG rc=%d\n",
+				rc);
+	}
+#endif
+
 	/* AICL enable and set input-uv glitch flt to 20ms*/
 	reg = AICL_ENABLED_BIT | INPUT_UV_GLITCH_FLT_20MS_BIT;
 	rc = smb1360_masked_write(chip, CFG_GLITCH_FLT_REG, reg, reg);
@@ -4241,6 +4376,13 @@ static int smb_parse_dt(struct smb1360_chip *chip)
 	if (rc < 0)
 		chip->voltage_empty_mv = -EINVAL;
 
+#ifdef CONFIG_MACH_SPIRIT
+	rc = of_property_read_u32(node, "qcom,fg-suspend-voltage-empty-mv",
+					&chip->suspend_voltage_empty_mv);
+	if (rc < 0)
+		chip->suspend_voltage_empty_mv = -EINVAL;
+#endif
+
 	rc = of_property_read_u32(node, "qcom,fg-batt-capacity-mah",
 					&chip->batt_capacity_mah);
 	if (rc < 0)
@@ -4546,6 +4688,10 @@ static int smb1360_probe(struct i2c_client *client,
 			chip->usb_present,
 			smb1360_get_prop_batt_capacity(chip));
 
+#ifdef CONFIG_MACH_SPIRIT
+	g_chip = chip;
+#endif
+
 	return 0;
 
 unregister_batt_psy:
@@ -4583,6 +4729,13 @@ static int smb1360_suspend(struct device *dev)
 		if (rc)
 			pr_err("Couldn't save irq cfg regs rc=%d\n", rc);
 	}
+
+#ifdef CONFIG_MACH_SPIRIT
+	rc = smb1360_set_batt_empty_voltage(chip,
+			chip->suspend_voltage_empty_mv);
+	if (rc < 0)
+		pr_err("Couldn't set batt_empty voltage rc=%d\n", rc);
+#endif
 
 	/* enable only important IRQs */
 	rc = smb1360_write(chip, IRQ_CFG_REG, IRQ_DCIN_UV_BIT
@@ -4628,6 +4781,12 @@ static int smb1360_resume(struct device *dev)
 	int i, rc;
 	struct i2c_client *client = to_i2c_client(dev);
 	struct smb1360_chip *chip = i2c_get_clientdata(client);
+
+#ifdef CONFIG_MACH_SPIRIT
+	rc = smb1360_set_batt_empty_voltage(chip, chip->voltage_empty_mv);
+	if (rc < 0)
+		pr_err("Couldn't set batt_empty voltage rc=%d\n", rc);
+#endif
 
 	/* Restore the IRQ config */
 	for (i = 0; i < 3; i++) {
