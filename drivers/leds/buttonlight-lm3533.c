@@ -21,6 +21,7 @@
 #include <linux/workqueue.h>
 #include <linux/i2c.h>
 #include <linux/types.h>
+#include <linux/delay.h>
 
 #include <linux/mfd/lm3533.h>
 
@@ -46,6 +47,7 @@
 
 #define LM3533_LED_FLAG_PATTERN_ENABLE		1
 
+bool button_bl_open_flag = false;
 
 struct lm3533_led {
 	struct lm3533 *lm3533;
@@ -58,12 +60,7 @@ struct lm3533_led {
 
 	struct work_struct work;
 	u8 new_brightness;
-
-	bool patten_enabled;
 };
-
-struct lm3533_led *color_leds[3];
-struct work_struct color_work;
 
 static inline struct lm3533_led *to_lm3533_led(struct led_classdev *cdev)
 {
@@ -91,60 +88,39 @@ static inline u8 lm3533_led_get_pattern_reg(struct lm3533_led *led,
 	return base + lm3533_led_get_pattern(led) * LM3533_REG_PATTERN_STEP;
 }
 
-static int lm3533_led_pattern_enable(struct lm3533_led *led, int enable)
-{
-	u8 mask;
-	u8 val;
-	int pattern;
-	int state;
-	int ret = 0;
-
-	dev_dbg(led->cdev.dev, "%s - %d\n", __func__, enable);
-
-	mutex_lock(&led->mutex);
-
-	state = test_bit(LM3533_LED_FLAG_PATTERN_ENABLE, &led->flags);
-	if ((enable && state) || (!enable && !state))
-		goto out;
-	pattern = lm3533_led_get_pattern(led);
-	mask = 1 << (2 * pattern);
-
-	if (enable)
-		val = mask;
-	else
-		val = 0;
-
-	ret = lm3533_update(led->lm3533, LM3533_REG_PATTERN_ENABLE, val, mask);
-	if (ret) {
-		dev_err(led->cdev.dev, "failed to enable pattern %d (%d)\n",
-							pattern, enable);
-		goto out;
-	}
-
-	__change_bit(LM3533_LED_FLAG_PATTERN_ENABLE, &led->flags);
-out:
-	mutex_unlock(&led->mutex);
-
-	return ret;
-}
-
 static void lm3533_led_update(struct lm3533_led *led)
 {
-	dev_dbg(led->cdev.dev, "%s - %u\n", __func__, led->new_brightness);
-
-	if (led->new_brightness == 0)
-		lm3533_led_pattern_enable(led, 0);	/* disable blink */
-	else if (led->patten_enabled)
-		lm3533_led_pattern_enable(led, 1);
-	lm3533_ctrlbank_set_brightness(&led->cb, led->new_brightness);
-}
-
-static void lm3533_update_work(struct work_struct *work)
-{
-	int i;
-	for (i = 0; i < 3; i++) {
-		lm3533_led_update(color_leds[i]);
+	static int old_brightness = -1;
+	dev_info(led->cdev.dev, "%s - %u\n", __func__, led->new_brightness);
+	if(0 == led->new_brightness)
+	{
+		if(old_brightness == led->new_brightness)
+		{
+			return ;
+		}
+		lm3533_ctrlbank_set_brightness(&led->cb, led->new_brightness);
+		mutex_lock(&(led->lm3533->lock));
+		if((!lcd_bl_open_flag)&&button_bl_open_flag)
+		{
+			lm3533_disable(led->lm3533);
+		}
+		button_bl_open_flag = false;
+		mutex_unlock(&(led->lm3533->lock));
 	}
+	else
+	{
+		mutex_lock(&(led->lm3533->lock));
+		if((!button_bl_open_flag)&&(!lcd_bl_open_flag))
+		{
+			lm3533_enable(led->lm3533);
+			mdelay(2);
+			lm3533_init(led->lm3533);
+		}
+		button_bl_open_flag = true;
+		mutex_unlock(&(led->lm3533->lock));
+		lm3533_ctrlbank_set_brightness(&led->cb, led->new_brightness);
+	}
+	old_brightness = led->new_brightness;
 }
 
 static void lm3533_led_work(struct work_struct *work)
@@ -159,11 +135,10 @@ static void lm3533_led_set(struct led_classdev *cdev,
 {
 	struct lm3533_led *led = to_lm3533_led(cdev);
 
-	dev_dbg(led->cdev.dev, "%s - %d\n", __func__, value);
-	lm3533_led_pattern_enable(led, 0);	/* disable blink */
+	dev_info(led->cdev.dev, "%s - %d\n", __func__, value);
+
 	led->new_brightness = value;
-	if (!led->patten_enabled)
-		schedule_work(&led->work);
+	schedule_work(&led->work);
 }
 
 static enum led_brightness lm3533_led_get(struct led_classdev *cdev)
@@ -179,170 +154,6 @@ static enum led_brightness lm3533_led_get(struct led_classdev *cdev)
 	dev_dbg(led->cdev.dev, "%s - %u\n", __func__, val);
 
 	return val;
-}
-
-/* Pattern generator defines (delays in us). */
-#define LM3533_LED_DELAY1_VMIN	0x00
-#define LM3533_LED_DELAY2_VMIN	0x3d
-#define LM3533_LED_DELAY3_VMIN	0x80
-
-#define LM3533_LED_DELAY1_VMAX	(LM3533_LED_DELAY2_VMIN - 1)
-#define LM3533_LED_DELAY2_VMAX	(LM3533_LED_DELAY3_VMIN - 1)
-#define LM3533_LED_DELAY3_VMAX	0xff
-
-#define LM3533_LED_DELAY1_TMIN	16384U
-#define LM3533_LED_DELAY2_TMIN	1130496U
-#define LM3533_LED_DELAY3_TMIN	10305536U
-
-#define LM3533_LED_DELAY1_TMAX	999424U
-#define LM3533_LED_DELAY2_TMAX	9781248U
-#define LM3533_LED_DELAY3_TMAX	76890112U
-
-/* t_step = (t_max - t_min) / (v_max - v_min) */
-#define LM3533_LED_DELAY1_TSTEP	16384
-#define LM3533_LED_DELAY2_TSTEP	131072
-#define LM3533_LED_DELAY3_TSTEP	524288
-
-/* Delay limits for hardware accelerated blinking (in ms). */
-#define LM3533_LED_DELAY_ON_MAX \
-	((LM3533_LED_DELAY2_TMAX + LM3533_LED_DELAY2_TSTEP / 2) / 1000)
-#define LM3533_LED_DELAY_OFF_MAX \
-	((LM3533_LED_DELAY3_TMAX + LM3533_LED_DELAY3_TSTEP / 2) / 1000)
-
-/*
- * Returns linear map of *t from [t_min,t_max] to [v_min,v_max] with a step
- * size of t_step, where
- *
- *	t_step = (t_max - t_min) / (v_max - v_min)
- *
- * and updates *t to reflect the mapped value.
- */
-static u8 time_to_val(unsigned *t, unsigned t_min, unsigned t_step,
-							u8 v_min, u8 v_max)
-{
-	unsigned val;
-
-	val = (*t + t_step / 2 - t_min) / t_step + v_min;
-
-	*t = t_step * (val - v_min) + t_min;
-
-	return (u8)val;
-}
-
-/*
- * Returns time code corresponding to *delay (in ms) and updates *delay to
- * reflect actual hardware delay.
- *
- * Hardware supports 256 discrete delay times, divided into three groups with
- * the following ranges and step-sizes:
- *
- *	[   16,   999]	[0x00, 0x3c]	step  16 ms
- *	[ 1130,  9781]	[0x3d, 0x7f]	step 131 ms
- *	[10306, 76890]	[0x80, 0xff]	step 524 ms
- *
- * Note that delay group 3 is only available for delay_off.
- */
-static u8 lm3533_led_get_hw_delay(unsigned *delay)
-{
-	unsigned t;
-	u8 val;
-
-	t = *delay * 1000;
-
-	if (t >= (LM3533_LED_DELAY2_TMAX + LM3533_LED_DELAY3_TMIN) / 2) {
-		t = clamp(t, LM3533_LED_DELAY3_TMIN, LM3533_LED_DELAY3_TMAX);
-		val = time_to_val(&t,	LM3533_LED_DELAY3_TMIN,
-					LM3533_LED_DELAY3_TSTEP,
-					LM3533_LED_DELAY3_VMIN,
-					LM3533_LED_DELAY3_VMAX);
-	} else if (t >= (LM3533_LED_DELAY1_TMAX + LM3533_LED_DELAY2_TMIN) / 2) {
-		t = clamp(t, LM3533_LED_DELAY2_TMIN, LM3533_LED_DELAY2_TMAX);
-		val = time_to_val(&t,	LM3533_LED_DELAY2_TMIN,
-					LM3533_LED_DELAY2_TSTEP,
-					LM3533_LED_DELAY2_VMIN,
-					LM3533_LED_DELAY2_VMAX);
-	} else {
-		t = clamp(t, LM3533_LED_DELAY1_TMIN, LM3533_LED_DELAY1_TMAX);
-		val = time_to_val(&t,	LM3533_LED_DELAY1_TMIN,
-					LM3533_LED_DELAY1_TSTEP,
-					LM3533_LED_DELAY1_VMIN,
-					LM3533_LED_DELAY1_VMAX);
-	}
-
-	*delay = (t + 500) / 1000;
-
-	return val;
-}
-
-/*
- * Set delay register base to *delay (in ms) and update *delay to reflect
- * actual hardware delay used.
- */
-static u8 lm3533_led_delay_set(struct lm3533_led *led, u8 base,
-							unsigned long  *delay)
-{
-	unsigned t;
-	u8 val;
-	u8 reg;
-	int ret;
-
-	t = (unsigned)*delay;
-
-	/* Delay group 3 is only available for low time (delay off). */
-	if (base != LM3533_REG_PATTERN_LOW_TIME_BASE)
-		t = min(t, LM3533_LED_DELAY2_TMAX / 1000);
-
-	val = lm3533_led_get_hw_delay(&t);
-
-	dev_dbg(led->cdev.dev, "%s - %lu: %u (0x%02x)\n", __func__,
-							*delay, t, val);
-	reg = lm3533_led_get_pattern_reg(led, base);
-	ret = lm3533_write(led->lm3533, reg, val);
-	if (ret)
-		dev_err(led->cdev.dev, "failed to set delay (%02x)\n", reg);
-
-	*delay = t;
-
-	return ret;
-}
-
-static int lm3533_led_delay_on_set(struct lm3533_led *led, unsigned long  *t)
-{
-	return lm3533_led_delay_set(led, LM3533_REG_PATTERN_HIGH_TIME_BASE, t);
-}
-
-static int lm3533_led_delay_off_set(struct lm3533_led *led, unsigned long *t)
-{
-	return lm3533_led_delay_set(led, LM3533_REG_PATTERN_LOW_TIME_BASE, t);
-}
-
-static int lm3533_led_blink_set(struct led_classdev *cdev,
-				unsigned long  *delay_on,
-				unsigned long  *delay_off)
-{
-	struct lm3533_led *led = to_lm3533_led(cdev);
-	int ret;
-
-	dev_dbg(led->cdev.dev, "%s - on = %lu, off = %lu\n", __func__,
-							*delay_on, *delay_off);
-
-	if (*delay_on > LM3533_LED_DELAY_ON_MAX ||
-					*delay_off > LM3533_LED_DELAY_OFF_MAX)
-		return -EINVAL;
-
-	if (*delay_on == 0 && *delay_off == 0) {
-		*delay_on = 500;
-		*delay_off = 500;
-	}
-	ret = lm3533_led_delay_on_set(led, delay_on);
-	if (ret)
-		return ret;
-
-	ret = lm3533_led_delay_off_set(led, delay_off);
-	if (ret)
-		return ret;
-
-	return lm3533_led_pattern_enable(led, 1);
 }
 
 static ssize_t show_id(struct device *dev,
@@ -639,40 +450,7 @@ static ssize_t store_update(struct device *dev,
 	if (kstrtou8(buf, 0, &val))
 		return -EINVAL;
 
-	schedule_work(&color_work);
 	return len;
-}
-
-static ssize_t show_blink(struct device *dev,
-					   struct device_attribute *attr,
-					   char *buf)
-{
-	dev_info(dev, "%s \n", __func__);
-	return 1;
-}
-
-static ssize_t store_blink(struct device *dev,
-					   struct device_attribute *attr,
-					   const char *buf, size_t len)
-{
-	ssize_t ret = -EINVAL;
-	unsigned long blinking;
-	struct led_classdev *led_cdev = dev_get_drvdata(dev);
-	struct lm3533_led *led = to_lm3533_led(led_cdev);
-	ret = kstrtoul(buf, 10, &blinking);
-	if (ret)
-		return ret;
-	led->new_brightness = blinking ? led->cdev.max_brightness : 0;
-	if(blinking)
-	{
-		lm3533_led_pattern_enable(led, 1);	/* enable blink */
-	}
-	else
-	{
-		lm3533_led_pattern_enable(led, 0);	/* disable blink */
-	}
-	lm3533_led_update(led);
-	return 1;
 }
 
 static LM3533_ATTR_RW(als_channel);
@@ -683,8 +461,6 @@ static LM3533_ATTR_RW(linear);
 static LM3533_ATTR_RW(pwm);
 static LM3533_ATTR_RW(risetime);
 static LM3533_ATTR_RW(update);
-static LM3533_ATTR_RW(blink);
-
 
 static struct attribute *lm3533_led_attributes[] = {
 	&dev_attr_als_channel.attr,
@@ -695,7 +471,6 @@ static struct attribute *lm3533_led_attributes[] = {
 	&dev_attr_pwm.attr,
 	&dev_attr_risetime.attr,
 	&dev_attr_update.attr,
-	&dev_attr_blink.attr,
 	NULL,
 };
 
@@ -729,35 +504,11 @@ static int lm3533_led_setup(struct lm3533_led *led,
 					struct lm3533_led_platform_data *pdata)
 {
 	int ret;
-	u8 reg;
 
 	ret = lm3533_ctrlbank_set_max_current(&led->cb, pdata->max_current);
 	if (ret)
 		return ret;
 
-	if (pdata->delay_on && pdata->delay_off) {
-		ret = lm3533_led_delay_on_set(led, &pdata->delay_on);
-		if (ret)
-			return ret;
-
-		ret = lm3533_led_delay_off_set(led, &pdata->delay_off);
-		if (ret)
-			return ret;
-
-		/* 1.049s for default falltime */
-		reg = lm3533_led_get_pattern_reg(led, LM3533_REG_PATTERN_FALLTIME_BASE);
-		ret = lm3533_write(led->lm3533, reg, 3);
-		if (ret)
-			return ret;
-
-		/* 1.049s for default risetime */
-		reg = lm3533_led_get_pattern_reg(led, LM3533_REG_PATTERN_RISETIME_BASE);
-		ret = lm3533_write(led->lm3533, reg, 3);
-		if (ret)
-			return ret;
-
-		//led->patten_enabled = true;
-	}
 	return lm3533_ctrlbank_set_pwm(&led->cb, pdata->pwm);
 }
 
@@ -794,14 +545,9 @@ static int lm3533_led_probe(struct platform_device *pdev)
 	led->cdev.default_trigger = pdata->default_trigger;
 	led->cdev.brightness_set = lm3533_led_set;
 	led->cdev.brightness_get = lm3533_led_get;
-	led->cdev.blink_set = lm3533_led_blink_set;
 	led->cdev.brightness = LED_OFF;
 	led->id = pdev->id;
-	if (led->id < 3)
-		color_leds[led->id] = led;
 
-	if (led->id == 0)
-		INIT_WORK(&color_work, lm3533_update_work);
 	mutex_init(&led->mutex);
 	INIT_WORK(&led->work, lm3533_led_work);
 
@@ -886,7 +632,7 @@ static struct platform_driver lm3533_led_driver = {
 };
 module_platform_driver(lm3533_led_driver);
 
-MODULE_AUTHOR("Johan Hovold <jhovold@gmail.com>");
+MODULE_AUTHOR("feng wei <fengwei84@gmail.com>");
 MODULE_DESCRIPTION("LM3533 LED driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:lm3533-leds");
