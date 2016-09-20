@@ -6868,17 +6868,9 @@ void __cfg80211_send_event_skb(struct sk_buff *skb, gfp_t gfp)
 	void *hdr = ((void **)skb->cb)[1];
 	struct nlattr *data = ((void **)skb->cb)[2];
 
-<<<<<<< HEAD
-=======
 	/* clear CB data for netlink core to own from now on */
 	memset(skb->cb, 0, sizeof(skb->cb));
 
-	if (WARN_ON(!rdev->testmode_info)) {
-		kfree_skb(skb);
-		return -EINVAL;
-	}
-
->>>>>>> 92113349fc2c6110254641c409d82cfc4df2ce5e
 	nla_nest_end(skb, data);
 	genlmsg_end(skb, hdr);
 
@@ -6890,20 +6882,6 @@ void __cfg80211_send_event_skb(struct sk_buff *skb, gfp_t gfp)
 			nl80211_testmode_mcgrp.id, gfp);
 }
 EXPORT_SYMBOL(__cfg80211_send_event_skb);
-
-<<<<<<< HEAD
-=======
-	/* clear CB data for netlink core to own from now on */
-	memset(skb->cb, 0, sizeof(skb->cb));
-
-	nla_nest_end(skb, data);
-	genlmsg_end(skb, hdr);
-	genlmsg_multicast_netns(wiphy_net(&rdev->wiphy), skb, 0,
-				nl80211_testmode_mcgrp.id, gfp);
-}
-EXPORT_SYMBOL(cfg80211_testmode_event);
-#endif
->>>>>>> 92113349fc2c6110254641c409d82cfc4df2ce5e
 
 static int nl80211_connect(struct sk_buff *skb, struct genl_info *info)
 {
@@ -11196,7 +11174,7 @@ static int nl80211_netlink_notify(struct notifier_block * nb,
 	struct wireless_dev *wdev;
 	struct cfg80211_beacon_registration *reg, *tmp;
 
-	if (state != NETLINK_URELEASE)
+	if (state != NETLINK_URELEASE || notify->protocol != NETLINK_GENERIC)
 		return NOTIFY_DONE;
 
 	rcu_read_lock();

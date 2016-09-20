@@ -141,6 +141,19 @@ bool arch_match_cpu_phys_id(int cpu, u64 phys_id)
 	return phys_id == cpu_logical_map(cpu);
 }
 
+struct cpuinfo_arm64 {
+	struct cpu	cpu;
+	u32		reg_midr;
+};
+
+static DEFINE_PER_CPU(struct cpuinfo_arm64, cpu_data);
+
+void cpuinfo_store_cpu(void)
+{
+	struct cpuinfo_arm64 *info = this_cpu_ptr(&cpu_data);
+	info->reg_midr = read_cpuid_id();
+}
+
 struct mpidr_hash mpidr_hash;
 #ifdef CONFIG_SMP
 /**
@@ -231,6 +244,8 @@ static void __init setup_processor(void)
 
 	sprintf(init_utsname()->machine, ELF_PLATFORM);
 	elf_hwcap = 0;
+
+	cpuinfo_store_cpu();
 
 	/*
 	 * Check for sane CTR_EL0.CWG value.

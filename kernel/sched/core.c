@@ -3209,7 +3209,7 @@ static void try_to_wake_up_local(struct task_struct *p)
 	struct rq *rq = task_rq(p);
 
 	if (rq != this_rq() || p == current) {
-		printk_sched("%s: Failed to wakeup task %d (%s), rq = %p, this_rq = %p, p = %p, current = %p\n",
+		printk_deferred("%s: Failed to wakeup task %d (%s), rq = %p, this_rq = %p, p = %p, current = %p\n",
 			__func__, task_pid_nr(p), p->comm, rq,
 			this_rq(), p, current);
 		return;
@@ -3254,7 +3254,6 @@ out:
  */
 int wake_up_process(struct task_struct *p)
 {
-	WARN_ON(task_is_stopped_or_traced(p));
 	return try_to_wake_up(p, TASK_NORMAL, 0);
 }
 EXPORT_SYMBOL(wake_up_process);
@@ -7178,6 +7177,7 @@ migration_call(struct notifier_block *nfb, unsigned long action, void *hcpu)
 		set_window_start(rq);
 		raw_spin_unlock_irqrestore(&rq->lock, flags);
 		rq->calc_load_update = calc_load_update;
+		account_reset_rq(rq);
 		break;
 
 	case CPU_ONLINE:
@@ -9025,6 +9025,7 @@ void __init sched_init(void)
 		rq->wakeup_latency = 0;
 		rq->wakeup_energy = 0;
 #ifdef CONFIG_SCHED_HMP
+		cpumask_set_cpu(i, &rq->freq_domain_cpumask);
 		rq->cur_freq = 1;
 		rq->max_freq = 1;
 		rq->min_freq = 1;
