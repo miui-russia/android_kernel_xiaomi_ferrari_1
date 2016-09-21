@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2007 Google Incorporated
  * Copyright (c) 2008-2016, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2015 XiaoMi, Inc.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -3104,6 +3105,16 @@ int mdss_fb_dcm(struct msm_fb_data_type *mfd, int req_state)
 	}
 
 	switch (req_state) {
+	case DCM_SLEEP:
+		if (mfd->mdp.pp_key_event_fnc)
+			mfd->mdp.pp_key_event_fnc(mfd, KEY_SLEEP);
+		break;
+	case DCM_WAKEUP:
+		if (mfd->mdp.pp_key_event_fnc) {
+			mfd->mdp.pp_key_event_fnc(mfd, KEY_WAKEUP);
+			mfd->mdp.pp_key_event_fnc(mfd, KEY_MENU);
+		}
+		break;
 	case DCM_UNBLANK:
 		if (mfd->dcm_state == DCM_UNINIT &&
 			mdss_fb_is_power_off(mfd) && mfd->mdp.on_fnc) {

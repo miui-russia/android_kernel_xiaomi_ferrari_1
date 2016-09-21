@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2015 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -2208,6 +2209,7 @@ int mdss_mdp_pp_overlay_init(struct msm_fb_data_type *mfd)
 
 	if (mdata->nad_cfgs) {
 		mfd->mdp.ad_calc_bl = pp_ad_calc_bl;
+		mfd->mdp.pp_key_event_fnc = mdss_pp_input_key_event;
 		mfd->mdp.ad_shutdown_cleanup = pp_ad_shutdown_cleanup;
 	}
 	return 0;

@@ -1,4 +1,5 @@
 /* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2015 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -404,7 +405,7 @@ static int mdss_dsi_get_dt_vreg_data(struct device *dev,
 		}
 
 		pr_debug("%s: %s min=%d, max=%d, enable=%d, disable=%d, preonsleep=%d, postonsleep=%d, preoffsleep=%d, postoffsleep=%d\n",
-			__func__,
+		 __func__,
 			mp->vreg_config[i].vreg_name,
 			mp->vreg_config[i].min_voltage,
 			mp->vreg_config[i].max_voltage,
@@ -472,8 +473,10 @@ static int mdss_dsi_off(struct mdss_panel_data *pdata, int power_state)
 
 	panel_info = &ctrl_pdata->panel_data.panel_info;
 
-	pr_debug("%s+: ctrl=%p ndx=%d power_state=%d\n",
+	pr_err("%s+: ctrl=%p ndx=%d power_state=%d\n",
 		__func__, ctrl_pdata, ctrl_pdata->ndx, power_state);
+
+	ctrl_pdata->dsi_pipe_ready = false;
 
 	if (power_state == panel_info->panel_power_state) {
 		pr_debug("%s: No change in power state %d -> %d\n", __func__,
@@ -512,7 +515,7 @@ panel_power_ctrl:
 		panel_info->mipi.frame_rate = panel_info->new_fps;
 
 end:
-	pr_debug("%s-:\n", __func__);
+	pr_err("%s-:\n", __func__);
 
 	return ret;
 }
@@ -559,8 +562,8 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
-	cur_power_state = pdata->panel_info.panel_power_state;
-	pr_debug("%s+: ctrl=%p ndx=%d cur_power_state=%d\n", __func__,
+        cur_power_state = pdata->panel_info.panel_power_state;
+	pr_err("%s+: ctrl=%p ndx=%d cur_power_state=%d\n", __func__,
 		ctrl_pdata, ctrl_pdata->ndx, cur_power_state);
 
 	pinfo = &pdata->panel_info;
@@ -632,7 +635,8 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 		mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 0);
 
 end:
-	pr_debug("%s-:\n", __func__);
+	pr_err("%s-:\n", __func__);
+	ctrl_pdata->dsi_pipe_ready = true;
 	return 0;
 }
 
@@ -1435,6 +1439,8 @@ static struct device_node *mdss_dsi_find_panel_of_node(
 		pr_debug("%s:%d:%s:%s\n", __func__, __LINE__,
 			 panel_cfg, panel_name);
 
+		pr_info("%s:%d:%s:%s\n", __func__, __LINE__,
+			panel_cfg, panel_name);
 		mdss_node = of_parse_phandle(pdev->dev.of_node,
 					     "qcom,mdss-mdp", 0);
 
@@ -1510,7 +1516,7 @@ static int mdss_dsi_ctrl_probe(struct platform_device *pdev)
 	}
 	ctrl_pdata->mdss_util = util;
 	atomic_set(&ctrl_pdata->te_irq_ready, 0);
-
+	ctrl_pdata->dsi_pipe_ready = false;
 	ctrl_name = of_get_property(pdev->dev.of_node, "label", NULL);
 	if (!ctrl_name)
 		pr_info("%s:%d, DSI Ctrl name not specified\n",
