@@ -48,7 +48,7 @@ struct lm3533_als_platform_data {
 	u8 r_select;			/* 1 - 127 (ignored in PWM-mode) */
 };
 
-+enum lm3533_edp_states {
+enum lm3533_edp_states {
 	LM3533_EDP_NEG_8,
 	LM3533_EDP_NEG_7,
 	LM3533_EDP_NEG_6,

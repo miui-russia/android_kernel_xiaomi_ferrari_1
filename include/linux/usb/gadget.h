@@ -574,6 +574,7 @@ struct usb_gadget {
 	bool				remote_wakeup;
 	void				*private;
 	u32				xfer_isr_count;
+	u8				usb_sys_state;
 };
 #define work_to_gadget(w)	(container_of((w), struct usb_gadget, work))
 
